@@ -159,9 +159,67 @@ jobs:
           binaries/org.eclipse.swt.cocoa.macosx.aarch64/**/META-INF/MANIFEST.MF
           bundles/org.eclipse.swt/target/*.jar
 
+  build-macos-universal:
+    name: Build macOS Universal Binary
+    needs: [build-macos-x64, build-macos-aarch64]
+    runs-on: macos-latest
+    steps:
+    - name: Download macOS Intel artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: swt-macos-x86_64
+        path: macos-x86_64
+
+    - name: Download macOS ARM artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: swt-macos-aarch64
+        path: macos-aarch64
+
+    - name: Create universal binaries
+      run: |
+        mkdir -p universal/binaries
+
+        # Find all .jnilib files and create universal versions
+        find macos-x86_64 -name "*.jnilib" | while read intel_lib; do
+          rel_path="${intel_lib#macos-x86_64/}"
+          arm_lib="macos-aarch64/${rel_path}"
+          universal_lib="universal/${rel_path}"
+
+          if [ -f "$arm_lib" ]; then
+            echo "Creating universal binary for: $rel_path"
+            mkdir -p "$(dirname "$universal_lib")"
+            lipo -create "$intel_lib" "$arm_lib" -output "$universal_lib"
+
+            # Verify the universal binary
+            echo "Architectures in universal binary:"
+            lipo -info "$universal_lib"
+          else
+            echo "Warning: ARM version not found for $intel_lib"
+          fi
+        done
+
+        # Copy MANIFEST files (use x86_64 version, they should be identical)
+        find macos-x86_64 -name "MANIFEST.MF" | while read manifest; do
+          rel_path="${manifest#macos-x86_64/}"
+          universal_manifest="universal/${rel_path}"
+          mkdir -p "$(dirname "$universal_manifest")"
+          cp "$manifest" "$universal_manifest"
+        done
+
+        # List what we created
+        echo "Universal binaries created:"
+        find universal -type f
+
+    - name: Upload macOS Universal artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-universal
+        path: universal/**
+
   create-release-bundle:
     name: Create Release Bundle
-    needs: [build-linux-x64, build-windows-x64, build-macos-x64, build-macos-aarch64]
+    needs: [build-linux-x64, build-windows-x64, build-macos-x64, build-macos-aarch64, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
