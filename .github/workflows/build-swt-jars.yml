@@ -164,6 +164,9 @@ jobs:
     needs: [build-macos-x64, build-macos-aarch64]
     runs-on: macos-latest
     steps:
+    - name: Checkout (for scripts)
+      uses: actions/checkout@v4
+
     - name: Download macOS Intel artifacts
       uses: actions/download-artifact@v4
       with:
@@ -176,46 +179,39 @@ jobs:
         name: swt-macos-aarch64
         path: macos-aarch64
 
-    - name: Create universal binaries
+    - name: List downloaded artifacts
       run: |
-        mkdir -p universal/binaries
+        echo "=== Intel artifacts ==="
+        find macos-x86_64 -type f
+        echo ""
+        echo "=== ARM artifacts ==="
+        find macos-aarch64 -type f
 
-        # Find all .jnilib files and create universal versions
-        find macos-x86_64 -name "*.jnilib" | while read intel_lib; do
-          rel_path="${intel_lib#macos-x86_64/}"
-          arm_lib="macos-aarch64/${rel_path}"
-          universal_lib="universal/${rel_path}"
+    - name: Create universal JAR
+      run: |
+        chmod +x .github/scripts/create-universal-macos-jar.sh
 
-          if [ -f "$arm_lib" ]; then
-            echo "Creating universal binary for: $rel_path"
-            mkdir -p "$(dirname "$universal_lib")"
-            lipo -create "$intel_lib" "$arm_lib" -output "$universal_lib"
+        # Find the SWT JAR files (not fragment binaries)
+        INTEL_JAR=$(find macos-x86_64 -name "org.eclipse.swt-*.jar" -o -name "org.eclipse.swt.cocoa.*.jar" | head -1)
+        ARM_JAR=$(find macos-aarch64 -name "org.eclipse.swt-*.jar" -o -name "org.eclipse.swt.cocoa.*.jar" | head -1)
 
-            # Verify the universal binary
-            echo "Architectures in universal binary:"
-            lipo -info "$universal_lib"
-          else
-            echo "Warning: ARM version not found for $intel_lib"
-          fi
-        done
+        if [ -z "$INTEL_JAR" ] || [ -z "$ARM_JAR" ]; then
+          echo "ERROR: Could not find SWT JAR files"
+          echo "Intel JAR: $INTEL_JAR"
+          echo "ARM JAR: $ARM_JAR"
+          exit 1
+        fi
 
-        # Copy MANIFEST files (use x86_64 version, they should be identical)
-        find macos-x86_64 -name "MANIFEST.MF" | while read manifest; do
-          rel_path="${manifest#macos-x86_64/}"
-          universal_manifest="universal/${rel_path}"
-          mkdir -p "$(dirname "$universal_manifest")"
-          cp "$manifest" "$universal_manifest"
-        done
+        mkdir -p universal
+        OUTPUT_JAR="universal/org.eclipse.swt.cocoa.macosx.universal.jar"
 
-        # List what we created
-        echo "Universal binaries created:"
-        find universal -type f
+        .github/scripts/create-universal-macos-jar.sh "$INTEL_JAR" "$ARM_JAR" "$OUTPUT_JAR"
 
     - name: Upload macOS Universal artifacts
       uses: actions/upload-artifact@v4
       with:
         name: swt-macos-universal
-        path: universal/**
+        path: universal/*.jar
 
   create-release-bundle:
     name: Create Release Bundle
