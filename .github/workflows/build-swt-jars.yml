@@ -1,0 +1,189 @@
+name: Build SWT JARs with Natives
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  build-linux-x64:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Install GTK dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -qq -y build-essential git
+        sudo apt-get install -qq -y libgtk-3-dev libgtk-4-dev freeglut3-dev webkit2gtk-driver libwebkitgtk-6.0-4
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      env:
+        GTK_XCFLAGS: '-Wno-deprecated-declarations'
+      run: |
+        mvn clean install -Dnative=gtk.linux.x86_64 --batch-mode -V -U -e --threads 1C -DforkCount=1
+
+    - name: Upload Linux x64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-linux-x86_64
+        path: |
+          binaries/org.eclipse.swt.gtk.linux.x86_64/**/*.so
+          binaries/org.eclipse.swt.gtk.linux.x86_64/**/META-INF/MANIFEST.MF
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-windows-x64:
+    name: Build Windows x86_64
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Pull Windows binaries (WebView2)
+      run: |
+        git lfs pull --include='/binaries/org.eclipse.swt.win32.win32.x86_64/WebView2Loader.dll'
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      run: |
+        mvn clean install -Dnative=win32.win32.x86_64 --batch-mode -V -U -e --threads 1C -DforkCount=1
+
+    - name: Upload Windows x64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-windows-x86_64
+        path: |
+          binaries/org.eclipse.swt.win32.win32.x86_64/**/*.dll
+          binaries/org.eclipse.swt.win32.win32.x86_64/**/META-INF/MANIFEST.MF
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-macos-x64:
+    name: Build macOS x86_64 (Intel)
+    runs-on: macos-13  # Intel runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      run: |
+        mvn clean install -Dnative=cocoa.macosx.x86_64 --batch-mode -V -U -e --threads 1C -DforkCount=1
+
+    - name: Upload macOS Intel JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-x86_64
+        path: |
+          binaries/org.eclipse.swt.cocoa.macosx.x86_64/**/*.jnilib
+          binaries/org.eclipse.swt.cocoa.macosx.x86_64/**/META-INF/MANIFEST.MF
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-macos-aarch64:
+    name: Build macOS aarch64 (Apple Silicon)
+    runs-on: macos-latest  # ARM64 runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      run: |
+        mvn clean install -Dnative=cocoa.macosx.aarch64 --batch-mode -V -U -e --threads 1C -DforkCount=1
+
+    - name: Upload macOS ARM JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-aarch64
+        path: |
+          binaries/org.eclipse.swt.cocoa.macosx.aarch64/**/*.jnilib
+          binaries/org.eclipse.swt.cocoa.macosx.aarch64/**/META-INF/MANIFEST.MF
+          bundles/org.eclipse.swt/target/*.jar
+
+  create-release-bundle:
+    name: Create Release Bundle
+    needs: [build-linux-x64, build-windows-x64, build-macos-x64, build-macos-aarch64]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-platforms
+
+    - name: List downloaded artifacts
+      run: |
+        echo "Downloaded artifacts:"
+        find all-platforms -type f
+
+    - name: Create release structure
+      run: |
+        mkdir -p release
+        cp -r all-platforms/* release/
+        cd release
+        zip -r ../swt-all-platforms.zip .
+
+    - name: Upload combined bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-all-platforms-bundle
+        path: swt-all-platforms.zip
+        retention-days: 90

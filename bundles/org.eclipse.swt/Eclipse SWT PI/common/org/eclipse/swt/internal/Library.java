@@ -215,11 +215,21 @@ static boolean isLoadable () {
 	String arch = arch ();
 	String manifestOS = attributes.getValue ("SWT-OS"); //$NON-NLS-1$
 	String manifestArch = attributes.getValue ("SWT-Arch"); //$NON-NLS-1$
-	if (arch.equals (manifestArch) && os.equals (manifestOS)) {
+
+	// Missing: allow (uber JAR or universal binary)
+	if (manifestOS == null || manifestArch == null) {
 		return true;
 	}
 
-	return false;
+	// Present but mismatched: fail with clear diagnostic
+	if (!arch.equals (manifestArch) || !os.equals (manifestOS)) {
+		System.err.println ("SWT platform mismatch:");
+		System.err.println ("  Manifest: SWT-OS=" + manifestOS + ", SWT-Arch=" + manifestArch);
+		System.err.println ("  Runtime: os=" + os + ", arch=" + arch);
+		return false;
+	}
+
+	return true;
 }
 
 static boolean load (String libName, StringBuilder message) {
