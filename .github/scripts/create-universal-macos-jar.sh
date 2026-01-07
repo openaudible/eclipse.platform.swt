@@ -11,7 +11,13 @@ fi
 
 INTEL_JAR="$1"
 ARM_JAR="$2"
-OUTPUT_JAR="$3"
+
+# Convert output path to absolute path
+if [[ "$3" = /* ]]; then
+    OUTPUT_JAR="$3"
+else
+    OUTPUT_JAR="$(pwd)/$3"
+fi
 
 echo "Creating Universal Binary JAR"
 echo "  Intel JAR: $INTEL_JAR"
