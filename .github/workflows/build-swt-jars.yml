@@ -187,9 +187,9 @@ jobs:
         chmod +x .github/scripts/create-universal-macos-jar.sh
 
         echo "Looking for fragment JARs (contain natives)..."
-        # Find the fragment JARs that contain the native libraries
-        INTEL_JAR=$(find macos-x86_64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.x86_64-*.jar" | head -1)
-        ARM_JAR=$(find macos-aarch64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.aarch64-*.jar" | head -1)
+        # Find the fragment JARs that contain the native libraries (exclude -sources.jar)
+        INTEL_JAR=$(find macos-x86_64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.x86_64-*.jar" ! -name "*-sources.jar" | head -1)
+        ARM_JAR=$(find macos-aarch64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.aarch64-*.jar" ! -name "*-sources.jar" | head -1)
 
         if [ -z "$INTEL_JAR" ] || [ -z "$ARM_JAR" ]; then
           echo "ERROR: Could not find fragment JAR files"
