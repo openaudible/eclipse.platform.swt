@@ -95,7 +95,7 @@ for file in "$D1"/*; do
         continue
     fi
 
-    if [ "$name" == *.jnilib ]; then
+    if [[ "$name" == *.jnilib ]]; then
         echo "  Creating universal binary: $name"
         lipo -create "$a1" "$a2" -output "$a3"
         echo "    Architectures: $(lipo -info "$a3")"
