@@ -106,8 +106,18 @@ jobs:
     - name: Install ARM64 JDK for native libraries
       run: |
         sudo apt-get install -qq -y openjdk-21-jdk:arm64
-        # Find the ARM64 JDK path
-        ARM64_JDK=$(dpkg -L openjdk-21-jdk:arm64 | grep '/include/jni.h$' | sed 's|/include/jni.h||')
+        # Find the ARM64 JDK path - check standard locations
+        if [ -d "/usr/lib/jvm/java-21-openjdk-arm64" ]; then
+          ARM64_JDK="/usr/lib/jvm/java-21-openjdk-arm64"
+        elif [ -d "/usr/lib/jvm/java-21-openjdk-aarch64" ]; then
+          ARM64_JDK="/usr/lib/jvm/java-21-openjdk-aarch64"
+        else
+          # Try to find it dynamically
+          ARM64_JDK=$(find /usr/lib/jvm -name "java-21-openjdk-*" -type d | grep -E "(arm64|aarch64)" | head -1)
+        fi
+        echo "Found ARM64 JDK at: $ARM64_JDK"
+        echo "Checking for jni.h: $(ls -la $ARM64_JDK/include/jni.h 2>&1 || echo 'NOT FOUND')"
+        echo "Checking for libjawt.so: $(ls -la $ARM64_JDK/lib/libjawt.so 2>&1 || echo 'NOT FOUND')"
         echo "ARM64_JDK_PATH=$ARM64_JDK" >> $GITHUB_ENV
 
     - name: Set up Maven
