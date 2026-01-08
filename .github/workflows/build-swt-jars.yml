@@ -96,12 +96,19 @@ jobs:
         sudo apt-get install -qq -y build-essential git gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         sudo apt-get install -qq -y libgtk-3-dev:arm64 libgtk-4-dev:arm64 freeglut3-dev:arm64 libwebkitgtk-6.0-4:arm64
 
-    - name: Set up Java 21
+    - name: Set up Java 21 (amd64 for Maven)
       uses: actions/setup-java@v4
       with:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+
+    - name: Install ARM64 JDK for native libraries
+      run: |
+        sudo apt-get install -qq -y openjdk-21-jdk:arm64
+        # Find the ARM64 JDK path
+        ARM64_JDK=$(dpkg -L openjdk-21-jdk:arm64 | grep '/include/jni.h$' | sed 's|/include/jni.h||')
+        echo "ARM64_JDK_PATH=$ARM64_JDK" >> $GITHUB_ENV
 
     - name: Set up Maven
       uses: stCarolas/setup-maven@v5
@@ -114,7 +121,11 @@ jobs:
         CC: aarch64-linux-gnu-gcc
         CXX: aarch64-linux-gnu-g++
         PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        SWT_JAVA_HOME: ${{ env.ARM64_JDK_PATH }}
+        AWT_LIB_PATH: ${{ env.ARM64_JDK_PATH }}/lib
       run: |
+        echo "Using ARM64 JDK at: $SWT_JAVA_HOME"
+        echo "Using ARM64 AWT libraries at: $AWT_LIB_PATH"
         mvn clean install -Dnative=gtk.linux.aarch64 --batch-mode -V -U -e --threads 1C -DskipTests=true
 
     - name: Upload Linux aarch64 JARs
