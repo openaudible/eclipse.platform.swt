@@ -86,6 +86,42 @@ jobs:
           binaries/org.eclipse.swt.win32.win32.x86_64/target/*.jar
           bundles/org.eclipse.swt/target/*.jar
 
+  build-windows-arm64:
+    name: Build Windows ARM64
+    runs-on: windows-latest  # Note: Use windows-11-arm64 when available on your runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Pull Windows ARM64 binaries (WebView2)
+      run: |
+        git lfs pull --include='/binaries/org.eclipse.swt.win32.win32.aarch64/WebView2Loader.dll'
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      run: mvn clean install "-Dnative=win32.win32.aarch64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
+
+    - name: Upload Windows ARM64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-windows-aarch64
+        path: |
+          binaries/org.eclipse.swt.win32.win32.aarch64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
   build-macos-x64:
     name: Build macOS x86_64 (Intel)
     runs-on: macos-15-intel  # Intel runner
@@ -218,7 +254,7 @@ jobs:
 
   create-release-bundle:
     name: Create Release Bundle
-    needs: [build-linux-x64, build-windows-x64, build-macos-x64, build-macos-aarch64, build-macos-universal]
+    needs: [build-linux-x64, build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
