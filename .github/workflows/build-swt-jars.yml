@@ -50,6 +50,60 @@ jobs:
           binaries/org.eclipse.swt.gtk.linux.x86_64/target/*.jar
           bundles/org.eclipse.swt/target/*.jar
 
+  build-linux-aarch64:
+    name: Build Linux aarch64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up QEMU for cross-compilation
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    - name: Install GTK dependencies and cross-compilation tools
+      run: |
+        sudo dpkg --add-architecture arm64
+        sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main universe" | sudo tee /etc/apt/sources.list.d/arm64.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+        sudo apt-get update -qq
+        sudo apt-get install -qq -y build-essential git gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        sudo apt-get install -qq -y libgtk-3-dev:arm64 libgtk-4-dev:arm64 freeglut3-dev:arm64 libwebkitgtk-6.0-4:arm64
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Build with Maven
+      env:
+        GTK_XCFLAGS: '-Wno-deprecated-declarations'
+        CC: aarch64-linux-gnu-gcc
+        CXX: aarch64-linux-gnu-g++
+        PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+      run: |
+        mvn clean install -Dnative=gtk.linux.aarch64 --batch-mode -V -U -e --threads 1C -DskipTests=true
+
+    - name: Upload Linux aarch64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-linux-aarch64
+        path: |
+          binaries/org.eclipse.swt.gtk.linux.aarch64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
   build-windows-x64:
     name: Build Windows x86_64
     runs-on: windows-latest
@@ -254,7 +308,7 @@ jobs:
 
   create-release-bundle:
     name: Create Release Bundle
-    needs: [build-linux-x64, build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
+    needs: [build-linux-x64, build-linux-aarch64, build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
