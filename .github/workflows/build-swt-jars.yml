@@ -69,15 +69,18 @@ jobs:
       run: |
         sudo dpkg --add-architecture arm64
 
-        # Backup and replace sources.list with arch-specific configuration
+        # Backup original sources
         sudo mv /etc/apt/sources.list /etc/apt/sources.list.backup
+        sudo mv /etc/apt/sources.list.d /etc/apt/sources.list.d.backup
+        sudo mkdir -p /etc/apt/sources.list.d
+
         CODENAME=$(lsb_release -cs)
 
         # Create new sources.list for amd64 only
         cat <<EOF | sudo tee /etc/apt/sources.list
         deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME main restricted universe multiverse
         deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME-updates main restricted universe multiverse
-        deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME-security main restricted universe multiverse
+        deb [arch=amd64] http://security.ubuntu.com/ubuntu/ $CODENAME-security main restricted universe multiverse
         deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
         EOF
 
