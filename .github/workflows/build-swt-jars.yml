@@ -171,8 +171,16 @@ jobs:
       with:
         maven-version: 3.9.11
 
+    - name: Locate Visual Studio
+      shell: pwsh
+      run: ./.github/scripts/locate-msvc.ps1
+
     - name: Build with Maven
       run: mvn clean install "-Dnative=win32.win32.x86_64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
+
+    - name: Verify native library architecture
+      shell: pwsh
+      run: ./.github/scripts/verify-pe-arch.ps1 -Directory binaries/org.eclipse.swt.win32.win32.x86_64 -Expected AMD64
 
     - name: Upload Windows x64 JARs
       uses: actions/upload-artifact@v4
@@ -184,7 +192,9 @@ jobs:
 
   build-windows-arm64:
     name: Build Windows ARM64
-    runs-on: windows-latest  # Note: Use windows-11-arm64 when available on your runner
+    # Must be a native ARM64 runner: build.bat derives the MSVC target from
+    # %PROCESSOR_ARCHITECTURE%, so an x64 runner silently emits x64 DLLs.
+    runs-on: windows-11-arm
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -200,6 +210,7 @@ jobs:
       with:
         java-version: '21'
         distribution: 'temurin'
+        architecture: 'aarch64'
         cache: maven
 
     - name: Set up Maven
@@ -207,8 +218,16 @@ jobs:
       with:
         maven-version: 3.9.11
 
+    - name: Locate Visual Studio
+      shell: pwsh
+      run: ./.github/scripts/locate-msvc.ps1
+
     - name: Build with Maven
       run: mvn clean install "-Dnative=win32.win32.aarch64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
+
+    - name: Verify native library architecture
+      shell: pwsh
+      run: ./.github/scripts/verify-pe-arch.ps1 -Directory binaries/org.eclipse.swt.win32.win32.aarch64 -Expected ARM64
 
     - name: Upload Windows ARM64 JARs
       uses: actions/upload-artifact@v4
