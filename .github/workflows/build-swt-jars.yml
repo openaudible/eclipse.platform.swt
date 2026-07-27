@@ -36,6 +36,12 @@ jobs:
       with:
         maven-version: 3.9.11
 
+    # The checked-in natives are LFS pointer stubs here (no lfs pull) and are
+    # rebuilt below. Dropping them keeps stubs whose name no longer matches the
+    # current revision out of the packaged JAR.
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.gtk.linux.x86_64/libswt-*.so
+
     - name: Build with Maven
       env:
         GTK_XCFLAGS: '-Wno-deprecated-declarations'
@@ -125,6 +131,9 @@ jobs:
       with:
         maven-version: 3.9.11
 
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.gtk.linux.aarch64/libswt-*.so
+
     - name: Build with Maven
       env:
         GTK_XCFLAGS: '-Wno-deprecated-declarations'
@@ -175,6 +184,10 @@ jobs:
       shell: pwsh
       run: ./.github/scripts/locate-msvc.ps1
 
+    - name: Drop stale checked-in natives
+      shell: pwsh
+      run: Remove-Item -Force -ErrorAction Ignore binaries/org.eclipse.swt.win32.win32.x86_64/swt-*.dll
+
     - name: Build with Maven
       run: mvn clean install "-Dnative=win32.win32.x86_64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
 
@@ -222,6 +235,10 @@ jobs:
       shell: pwsh
       run: ./.github/scripts/locate-msvc.ps1
 
+    - name: Drop stale checked-in natives
+      shell: pwsh
+      run: Remove-Item -Force -ErrorAction Ignore binaries/org.eclipse.swt.win32.win32.aarch64/swt-*.dll
+
     - name: Build with Maven
       run: mvn clean install "-Dnative=win32.win32.aarch64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
 
@@ -259,6 +276,9 @@ jobs:
       with:
         maven-version: 3.9.11
 
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.cocoa.macosx.x86_64/libswt-*.jnilib
+
     - name: Build with Maven
       run: |
         mvn clean install -Dnative=cocoa.macosx.x86_64 --batch-mode -V -U -e --threads 1C -DskipTests=true
@@ -292,6 +312,9 @@ jobs:
       uses: stCarolas/setup-maven@v5
       with:
         maven-version: 3.9.11
+
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.cocoa.macosx.aarch64/libswt-*.jnilib
 
     - name: Build with Maven
       run: |
