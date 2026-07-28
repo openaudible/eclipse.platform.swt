@@ -8,9 +8,23 @@ on:
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # The two Linux jobs below are DISABLED (`if: false`).
+  #
+  # The ubuntu-latest runners link natives against glibc 2.34+, which will not
+  # load on RHEL 8 / Debian 10 / Ubuntu 20.04. An already-compiled .so cannot be
+  # relinked down to an older glibc — it has to be compiled against an older
+  # sysroot. So the Linux JARs are built locally in Debian Buster containers
+  # (glibc 2.28) by ../build_linux.sh, and this workflow ships Windows and
+  # macOS only.
+  #
+  # To re-enable, drop the `if: false` lines and re-add both jobs to
+  # create-release-bundle's `needs:` list.
+  # ---------------------------------------------------------------------------
   build-linux-x64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
+    if: false  # built locally via build_linux.sh (glibc 2.28) — see note above
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -59,6 +73,7 @@ jobs:
   build-linux-aarch64:
     name: Build Linux aarch64
     runs-on: ubuntu-latest
+    if: false  # built locally via build_linux.sh (glibc 2.28) — see note above
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -392,7 +407,10 @@ jobs:
 
   create-release-bundle:
     name: Create Release Bundle
-    needs: [build-linux-x64, build-linux-aarch64, build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
+    # Linux is intentionally absent: those jobs are disabled and the Linux JARs
+    # are produced locally by build_linux.sh. A skipped `needs:` entry would
+    # skip this job too.
+    needs: [build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
