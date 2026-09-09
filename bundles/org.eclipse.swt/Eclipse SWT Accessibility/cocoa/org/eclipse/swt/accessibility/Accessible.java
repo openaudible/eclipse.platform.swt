@@ -1545,7 +1545,7 @@ public class Accessible {
 		if (attribute.isEqualToString(OS.NSAccessibilitySelectedTextAttribute)) setSelectedTextAttribute(value, childId);
 		if (attribute.isEqualToString(OS.NSAccessibilityVisibleCharacterRangeAttribute)) setVisibleCharacterRangeAttribute(value, childId);
 
-		if (accessibleValueListenersSize() > 0) {
+		if (attribute.isEqualToString(OS.NSAccessibilityValueAttribute) && accessibleValueListenersSize() > 0) {
 			AccessibleValueEvent event = new AccessibleValueEvent(this);
 			NSNumber number = new NSNumber(value);
 			event.value = Double.valueOf(number.doubleValue());
