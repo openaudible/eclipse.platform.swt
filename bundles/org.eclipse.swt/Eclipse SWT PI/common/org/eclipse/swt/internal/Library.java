@@ -52,6 +52,15 @@ public class Library {
 	static final String SUFFIX_64 = "-64";	//$NON-NLS-1$
 	static final String SWT_LIB_DIR;
 
+	/**
+	 * When true (-Dswt.library.verbose=true), the extract directory, every load
+	 * candidate and its outcome are logged to stderr.
+	 */
+	static final boolean VERBOSE = Boolean.getBoolean ("swt.library.verbose"); //$NON-NLS-1$
+
+	static final int PUBLISH_ATTEMPTS = 5;
+	static final long PUBLISH_INITIAL_BACKOFF_MS = 50;
+
 static {
 	DELIMITER = System.lineSeparator();
 	SEPARATOR = File.separator;
@@ -131,15 +140,105 @@ public static int SWT_VERSION (int major, int minor) {
 	return major * 1000 + minor;
 }
 
-private static boolean extractResource(String resourceName, File outFile) {
+static void verbose (String text) {
+	if (VERBOSE) System.err.println ("SWT: " + text); //$NON-NLS-1$
+}
+
+static void appendReason (StringBuilder message, String reason) {
+	if (message.length() == 0) message.append(DELIMITER);
+	message.append('\t');
+	message.append(reason);
+	message.append(DELIMITER);
+}
+
+/**
+ * Writes the resource into the existing <code>outFile</code>. The file is opened
+ * for writing rather than replaced, because a replace needs DELETE access, which
+ * is exactly what a virus scanner or indexer holding the file open takes away.
+ *
+ * @return null upon success, otherwise the reason for the failure
+ */
+private static String extractResource(String resourceName, File outFile) {
 	try (InputStream inputStream = Library.class.getResourceAsStream (resourceName)) {
-		if (inputStream == null) return false;
-		Files.copy(inputStream, outFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+		if (inputStream == null) return "resource not found: " + resourceName; //$NON-NLS-1$
+		try (OutputStream outputStream = Files.newOutputStream (outFile.toPath(), StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+			inputStream.transferTo (outputStream);
+		}
 	} catch (Throwable e) {
+		return e.toString();
+	}
+	return null;
+}
+
+static void deleteOrDeleteOnExit (File file) {
+	if (!file.delete () && file.exists ()) file.deleteOnExit ();
+}
+
+static boolean sleepBeforeRetry (long millis) {
+	try {
+		Thread.sleep (millis);
+		return true;
+	} catch (InterruptedException e) {
+		Thread.currentThread ().interrupt ();
 		return false;
 	}
+}
 
-	return true;
+/**
+ * Moves the fully written <code>tempFile</code> to <code>file</code>. The rename is
+ * retried briefly, because another process (virus scanner, indexer, cloud sync,
+ * backup agent) often holds a handle on a freshly written executable for a few
+ * milliseconds. If the rename never succeeds, the content is copied instead: a
+ * copy only needs to read the source, while a rename needs to unlink it, which
+ * is the right such a handle denies.
+ *
+ * @return null upon success, otherwise the reason for the failure
+ */
+static String publish (File tempFile, File file) {
+	Path source = tempFile.toPath (), target = file.toPath ();
+	Throwable lastError = null;
+	long backoff = PUBLISH_INITIAL_BACKOFF_MS;
+	for (int attempt = 1; attempt <= PUBLISH_ATTEMPTS; attempt++) {
+		try {
+			Files.move (source, target);
+			return null;
+		} catch (Throwable e) {
+			lastError = e;
+		}
+		/* Another process published while we were extracting. Windows may
+		 * report that as access denied rather than as an existing file. */
+		if (lastError instanceof FileAlreadyExistsException || file.exists ()) {
+			deleteOrDeleteOnExit (tempFile);
+			return null;
+		}
+		if (attempt == PUBLISH_ATTEMPTS || !sleepBeforeRetry (backoff)) break;
+		backoff *= 2;
+	}
+
+	/* No REPLACE_EXISTING: anything at the target was published by someone
+	 * else, and a partial file left by a failed copy is ours to remove. */
+	try {
+		Files.copy (source, target);
+	} catch (FileAlreadyExistsException e) {
+		deleteOrDeleteOnExit (tempFile);
+		return null;
+	} catch (Throwable e) {
+		file.delete ();
+		return "rename failed: " + lastError + "; copy failed: " + e; //$NON-NLS-1$ //$NON-NLS-2$
+	}
+	chmod ("755", file.getPath ()); //$NON-NLS-1$
+	deleteOrDeleteOnExit (tempFile);
+	System.err.println ("SWT: published " + file + " by copy, rename failed: " + lastError); //$NON-NLS-1$ //$NON-NLS-2$
+	return null;
+}
+
+static boolean extractFailed (StringBuilder message, File file, File tempFile, String reason) {
+	String text = "Could not extract " + file; //$NON-NLS-1$
+	if (tempFile != null) text += " from " + tempFile.getName () + " (" + tempFile.length () + " bytes)"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+	text += ": " + reason; //$NON-NLS-1$
+	System.err.println ("SWT: " + text); //$NON-NLS-1$
+	appendReason (message, text);
+	return false;
 }
 
 /**
@@ -149,11 +248,18 @@ private static boolean extractResource(String resourceName, File outFile) {
  * @param extractToFilePath full path of where the file is to be extacted to, inc name of file,
  *                          e.g /home/USER/.swt/lib/linux/x86_64/libswt-MYLIB-gtk-4826.so
  * @param mappedName file to be searched in jar.
+ * @param message receives the reason when extraction fails.
  * @return	true upon success, failure if something went wrong.
  */
-static boolean extract (String extractToFilePath, String mappedName) {
+static boolean extract (String extractToFilePath, String mappedName, StringBuilder message) {
 	File file = new File(extractToFilePath);
 	if (file.exists ()) return true;
+
+	String resourceName = "/" + mappedName.replace('\\', '/'); //$NON-NLS-1$
+	if (Library.class.getResource (resourceName) == null) {
+		verbose ("not in jar: " + resourceName); //$NON-NLS-1$
+		return false;
+	}
 
 	// Write to temp file first, so that other processes don't see
 	// partially written library on disk
@@ -161,28 +267,21 @@ static boolean extract (String extractToFilePath, String mappedName) {
 	try {
 		tempFile = File.createTempFile (file.getName(), ".tmp", file.getParentFile()); //$NON-NLS-1$
 	} catch (Throwable e) {
-		return false;
-				}
-
-	// Extract resource
-	String resourceName = "/" + mappedName.replace('\\', '/'); //$NON-NLS-1$
-	if (!extractResource (resourceName, tempFile)) {
-		tempFile.delete();
-		return false;
-			}
-
-	// Make it executable
-	chmod ("755", tempFile.getPath()); //$NON-NLS-1$
-
-	// "Publish" file now that it's ready to use.
-	// If there is a file already, then someone published while we were
-	// extracting, just delete our file and consider it a success.
-	try {
-		Files.move (tempFile.toPath(), file.toPath());
-	} catch (Throwable e) {
-		tempFile.delete();
+		return extractFailed (message, file, null, "cannot create temp file: " + e); //$NON-NLS-1$
 	}
 
+	String error = extractResource (resourceName, tempFile);
+	if (error == null) {
+		// Make it executable
+		chmod ("755", tempFile.getPath()); //$NON-NLS-1$
+		error = publish (tempFile, file);
+	}
+	if (error != null) {
+		boolean failed = extractFailed (message, file, tempFile, error);
+		deleteOrDeleteOnExit (tempFile);
+		return failed;
+	}
+	verbose ("extracted " + file); //$NON-NLS-1$
 	return true;
 }
 
@@ -191,10 +290,19 @@ static boolean isLoadable () {
 }
 
 static boolean isLoadable (boolean ignoreMissingManifest) {
+	String error = loadableError (ignoreMissingManifest);
+	if (error != null) System.err.println (error);
+	return error == null;
+}
+
+/**
+ * @return null if the natives in this jar match the running platform, otherwise the reason they do not
+ */
+static String loadableError (boolean ignoreMissingManifest) {
 	URL url = Platform.class.getClassLoader ().getResource ("org/eclipse/swt/internal/Library.class"); //$NON-NLS-1$
 	if (!url.getProtocol ().equals ("jar")) { //$NON-NLS-1$
 		/* SWT is presumably running in a development environment */
-		return true;
+		return null;
 	}
 
 	Attributes attributes = null;
@@ -202,26 +310,30 @@ static boolean isLoadable (boolean ignoreMissingManifest) {
 		URLConnection connection = url.openConnection();
 		if (!(connection instanceof JarURLConnection jc)) {
 			/* should never happen for a "jar:" url */
-			return false;
+			return "SWT jar cannot be opened: " + url; //$NON-NLS-1$
 		}
 		attributes = jc.getMainAttributes();
 	} catch (IOException e) {
 		/* should never happen for a valid SWT jar with the expected manifest values */
-		return false;
+		return "SWT jar manifest cannot be read: " + e; //$NON-NLS-1$
 	}
 
 	String os = os ();
 	String arch = arch ();
 	String manifestOS = attributes.getValue ("SWT-OS"); //$NON-NLS-1$
 	String manifestArch = attributes.getValue ("SWT-Arch"); //$NON-NLS-1$
-	if (arch.equals (manifestArch) && os.equals (manifestOS)) {
-		return true;
-	}
-	if (manifestArch == null && manifestOS == null && ignoreMissingManifest) {
-		return true;
+
+	// Uber JAR (neither entry) or universal macOS JAR (no SWT-Arch)
+	if ((manifestOS == null || manifestArch == null) && ignoreMissingManifest) {
+		return null;
 	}
 
-	return false;
+	if (!arch.equals (manifestArch) || !os.equals (manifestOS)) {
+		return "SWT platform mismatch: manifest SWT-OS=" + manifestOS + ", SWT-Arch=" + manifestArch //$NON-NLS-1$ //$NON-NLS-2$
+			+ "; runtime os=" + os + ", arch=" + arch; //$NON-NLS-1$ //$NON-NLS-2$
+	}
+
+	return null;
 }
 
 static boolean load (String libName, StringBuilder message) {
@@ -231,12 +343,11 @@ static boolean load (String libName, StringBuilder message) {
 		} else {
 			System.loadLibrary (libName);
 		}
+		verbose ("loaded " + libName); //$NON-NLS-1$
 		return true;
 	} catch (UnsatisfiedLinkError e) {
-		if (message.length() == 0) message.append(DELIMITER);
-		message.append('\t');
-		message.append(e.getMessage());
-		message.append(DELIMITER);
+		verbose ("cannot load " + libName + ": " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+		appendReason (message, e.getMessage());
 	}
 	return false;
 }
@@ -297,7 +408,8 @@ public static void loadLibrary (String name, boolean mapName) {
 	StringBuilder message = new StringBuilder();
 
 	/* Try loading library from swt library path */
-	String path = System.getProperty (SWT_LIB_PATH);
+	String swtLibPath = System.getProperty (SWT_LIB_PATH);
+	String path = swtLibPath;
 	if (path != null) {
 		path = new File (path).getAbsolutePath ();
 		for (int i = 0; i < candidates; i++) {
@@ -336,15 +448,21 @@ public static void loadLibrary (String name, boolean mapName) {
 
 	/* Try extracting and loading library from jar. */
 	if (path != null) {
+		verbose ("extract directory " + path); //$NON-NLS-1$
 		for (int i = 0; i < candidates; i++) {
-			if ((i == 0 || mapName) && extract (path + SEPARATOR + fileNames[i], mappedNames[i])) {
+			if ((i == 0 || mapName) && extract (path + SEPARATOR + fileNames[i], mappedNames[i], message)) {
 				if (load(path + SEPARATOR + fileNames[i], message)) return;
 			}
 		}
 	}
 
 	/* Failed to find the library */
-	throw new UnsatisfiedLinkError ("Could not load SWT library. Reasons: " + message.toString()); //$NON-NLS-1$
+	String loadableError = loadableError (true);
+	if (loadableError != null) appendReason (message, loadableError);
+	throw new UnsatisfiedLinkError ("Could not load SWT library " + name //$NON-NLS-1$
+		+ " (os=" + os () + ", arch=" + arch () //$NON-NLS-1$ //$NON-NLS-2$
+		+ ", " + SWT_LIB_PATH + "=" + swtLibPath //$NON-NLS-1$ //$NON-NLS-2$
+		+ ", extract directory=" + path + "). Reasons: " + message.toString()); //$NON-NLS-1$ //$NON-NLS-2$
 }
 
 static String mapLibraryName (String libName) {
