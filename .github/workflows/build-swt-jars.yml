@@ -1,0 +1,438 @@
+name: Build SWT JARs with Natives
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The two Linux jobs below are DISABLED (`if: false`).
+  #
+  # The ubuntu-latest runners link natives against glibc 2.34+, which will not
+  # load on RHEL 8 / Debian 10 / Ubuntu 20.04. An already-compiled .so cannot be
+  # relinked down to an older glibc — it has to be compiled against an older
+  # sysroot. So the Linux JARs are built locally in Debian Buster containers
+  # (glibc 2.28) by ../build_linux.sh, and this workflow ships Windows and
+  # macOS only.
+  #
+  # To re-enable, drop the `if: false` lines and re-add both jobs to
+  # create-release-bundle's `needs:` list.
+  # ---------------------------------------------------------------------------
+  build-linux-x64:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    if: false  # built locally via build_linux.sh (glibc 2.28) — see note above
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Install GTK dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -qq -y build-essential git
+        sudo apt-get install -qq -y libgtk-3-dev libgtk-4-dev freeglut3-dev webkit2gtk-driver libwebkitgtk-6.0-4
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    # The checked-in natives are LFS pointer stubs here (no lfs pull) and are
+    # rebuilt below. Dropping them keeps stubs whose name no longer matches the
+    # current revision out of the packaged JAR.
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.gtk.linux.x86_64/libswt-*.so
+
+    - name: Build with Maven
+      env:
+        GTK_XCFLAGS: '-Wno-deprecated-declarations'
+      run: |
+        mvn clean install -Dnative=gtk.linux.x86_64 --batch-mode -V -U -e --threads 1C -DskipTests=true
+
+    - name: Upload Linux x64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-linux-x86_64
+        path: |
+          binaries/org.eclipse.swt.gtk.linux.x86_64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-linux-aarch64:
+    name: Build Linux aarch64
+    runs-on: ubuntu-latest
+    if: false  # built locally via build_linux.sh (glibc 2.28) — see note above
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up QEMU for cross-compilation
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    - name: Install GTK dependencies and cross-compilation tools
+      run: |
+        sudo dpkg --add-architecture arm64
+
+        # Backup original sources
+        sudo mv /etc/apt/sources.list /etc/apt/sources.list.backup
+        sudo mv /etc/apt/sources.list.d /etc/apt/sources.list.d.backup
+        sudo mkdir -p /etc/apt/sources.list.d
+
+        CODENAME=$(lsb_release -cs)
+
+        # Create new sources.list for amd64 only
+        cat <<EOF | sudo tee /etc/apt/sources.list
+        deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME main restricted universe multiverse
+        deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME-updates main restricted universe multiverse
+        deb [arch=amd64] http://security.ubuntu.com/ubuntu/ $CODENAME-security main restricted universe multiverse
+        deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
+        EOF
+
+        # Add ARM64 sources pointing to ports
+        cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64.list
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $CODENAME main restricted universe multiverse
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $CODENAME-updates main restricted universe multiverse
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $CODENAME-security main restricted universe multiverse
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $CODENAME-backports main restricted universe multiverse
+        EOF
+
+        sudo apt-get update -qq
+        sudo apt-get install -qq -y build-essential git gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        sudo apt-get install -qq -y libgtk-3-dev:arm64 libgtk-4-dev:arm64 freeglut3-dev:arm64 libwebkitgtk-6.0-4:arm64
+
+    - name: Set up Java 21 (amd64 for Maven)
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Install ARM64 JDK for native libraries
+      run: |
+        sudo apt-get install -qq -y openjdk-21-jdk:arm64
+        # Find the ARM64 JDK path - check standard locations
+        if [ -d "/usr/lib/jvm/java-21-openjdk-arm64" ]; then
+          ARM64_JDK="/usr/lib/jvm/java-21-openjdk-arm64"
+        elif [ -d "/usr/lib/jvm/java-21-openjdk-aarch64" ]; then
+          ARM64_JDK="/usr/lib/jvm/java-21-openjdk-aarch64"
+        else
+          # Try to find it dynamically
+          ARM64_JDK=$(find /usr/lib/jvm -name "java-21-openjdk-*" -type d | grep -E "(arm64|aarch64)" | head -1)
+        fi
+        echo "Found ARM64 JDK at: $ARM64_JDK"
+        echo "Checking for jni.h: $(ls -la $ARM64_JDK/include/jni.h 2>&1 || echo 'NOT FOUND')"
+        echo "Checking for libjawt.so: $(ls -la $ARM64_JDK/lib/libjawt.so 2>&1 || echo 'NOT FOUND')"
+        echo "ARM64_JDK_PATH=$ARM64_JDK" >> $GITHUB_ENV
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.gtk.linux.aarch64/libswt-*.so
+
+    - name: Build with Maven
+      env:
+        GTK_XCFLAGS: '-Wno-deprecated-declarations'
+        CC: aarch64-linux-gnu-gcc
+        CXX: aarch64-linux-gnu-g++
+        PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        SWT_JAVA_HOME: ${{ env.ARM64_JDK_PATH }}
+        AWT_LIB_PATH: ${{ env.ARM64_JDK_PATH }}/lib
+      run: |
+        echo "Using ARM64 JDK at: $SWT_JAVA_HOME"
+        echo "Using ARM64 AWT libraries at: $AWT_LIB_PATH"
+        mvn clean install -Dnative=gtk.linux.aarch64 --batch-mode -V -U -e --threads 1C -DskipTests=true
+
+    - name: Upload Linux aarch64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-linux-aarch64
+        path: |
+          binaries/org.eclipse.swt.gtk.linux.aarch64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-windows-x64:
+    name: Build Windows x86_64
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Pull Windows binaries (WebView2)
+      run: |
+        git lfs pull --include='/binaries/org.eclipse.swt.win32.win32.x86_64/WebView2Loader.dll'
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Locate Visual Studio
+      shell: pwsh
+      run: ./.github/scripts/locate-msvc.ps1
+
+    - name: Drop stale checked-in natives
+      shell: pwsh
+      run: Remove-Item -Force -ErrorAction Ignore binaries/org.eclipse.swt.win32.win32.x86_64/swt-*.dll
+
+    - name: Build with Maven
+      run: mvn clean install "-Dnative=win32.win32.x86_64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
+
+    - name: Verify native library architecture
+      shell: pwsh
+      run: ./.github/scripts/verify-pe-arch.ps1 -Directory binaries/org.eclipse.swt.win32.win32.x86_64 -Expected AMD64
+
+    - name: Upload Windows x64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-windows-x86_64
+        path: |
+          binaries/org.eclipse.swt.win32.win32.x86_64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-windows-arm64:
+    name: Build Windows ARM64
+    # Must be a native ARM64 runner: build.bat derives the MSVC target from
+    # %PROCESSOR_ARCHITECTURE%, so an x64 runner silently emits x64 DLLs.
+    runs-on: windows-11-arm
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Pull Windows ARM64 binaries (WebView2)
+      run: |
+        git lfs pull --include='/binaries/org.eclipse.swt.win32.win32.aarch64/WebView2Loader.dll'
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        architecture: 'aarch64'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Locate Visual Studio
+      shell: pwsh
+      run: ./.github/scripts/locate-msvc.ps1
+
+    - name: Drop stale checked-in natives
+      shell: pwsh
+      run: Remove-Item -Force -ErrorAction Ignore binaries/org.eclipse.swt.win32.win32.aarch64/swt-*.dll
+
+    - name: Build with Maven
+      run: mvn clean install "-Dnative=win32.win32.aarch64" --batch-mode -V -U -e --threads 1C "-DskipTests=true"
+
+    - name: Verify native library architecture
+      shell: pwsh
+      run: ./.github/scripts/verify-pe-arch.ps1 -Directory binaries/org.eclipse.swt.win32.win32.aarch64 -Expected ARM64
+
+    - name: Upload Windows ARM64 JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-windows-aarch64
+        path: |
+          binaries/org.eclipse.swt.win32.win32.aarch64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-macos-x64:
+    name: Build macOS x86_64 (Intel)
+    runs-on: macos-15-intel  # Intel runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.cocoa.macosx.x86_64/libswt-*.jnilib
+
+    - name: Build with Maven
+      run: |
+        mvn clean install -Dnative=cocoa.macosx.x86_64 --batch-mode -V -U -e --threads 1C -DskipTests=true
+
+    - name: Upload macOS Intel JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-x86_64
+        path: |
+          binaries/org.eclipse.swt.cocoa.macosx.x86_64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-macos-aarch64:
+    name: Build macOS aarch64 (Apple Silicon)
+    runs-on: macos-latest  # ARM64 runner
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        lfs: false
+
+    - name: Set up Java 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v5
+      with:
+        maven-version: 3.9.11
+
+    - name: Drop stale checked-in natives
+      run: rm -f binaries/org.eclipse.swt.cocoa.macosx.aarch64/libswt-*.jnilib
+
+    - name: Build with Maven
+      run: |
+        mvn clean install -Dnative=cocoa.macosx.aarch64 --batch-mode -V -U -e --threads 1C -DskipTests=true
+
+    - name: Upload macOS ARM JARs
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-aarch64
+        path: |
+          binaries/org.eclipse.swt.cocoa.macosx.aarch64/target/*.jar
+          bundles/org.eclipse.swt/target/*.jar
+
+  build-macos-universal:
+    name: Build macOS Universal Binary
+    needs: [build-macos-x64, build-macos-aarch64]
+    runs-on: macos-latest
+    steps:
+    - name: Checkout (for scripts)
+      uses: actions/checkout@v4
+
+    - name: Download macOS Intel artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: swt-macos-x86_64
+        path: macos-x86_64
+
+    - name: Download macOS ARM artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: swt-macos-aarch64
+        path: macos-aarch64
+
+    - name: List downloaded artifacts
+      run: |
+        echo "=== Intel artifacts ==="
+        find macos-x86_64 -type f
+        echo ""
+        echo "=== ARM artifacts ==="
+        find macos-aarch64 -type f
+
+    - name: Create universal JAR
+      run: |
+        chmod +x .github/scripts/create-universal-macos-jar.sh
+
+        echo "Looking for fragment JARs (contain natives)..."
+        # Find the fragment JARs that contain the native libraries (exclude -sources.jar)
+        INTEL_JAR=$(find macos-x86_64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.x86_64-*.jar" ! -name "*-sources.jar" | head -1)
+        ARM_JAR=$(find macos-aarch64 -path "*/binaries/*/target/org.eclipse.swt.cocoa.macosx.aarch64-*.jar" ! -name "*-sources.jar" | head -1)
+
+        if [ -z "$INTEL_JAR" ] || [ -z "$ARM_JAR" ]; then
+          echo "ERROR: Could not find fragment JAR files"
+          echo "Intel JAR: $INTEL_JAR"
+          echo "ARM JAR: $ARM_JAR"
+          echo ""
+          echo "Available files:"
+          find macos-x86_64 -name "*.jar"
+          find macos-aarch64 -name "*.jar"
+          exit 1
+        fi
+
+        echo "Found Intel JAR: $INTEL_JAR"
+        echo "Found ARM JAR: $ARM_JAR"
+
+        mkdir -p universal
+        OUTPUT_JAR="universal/org.eclipse.swt.cocoa.macosx.universal.jar"
+
+        .github/scripts/create-universal-macos-jar.sh "$INTEL_JAR" "$ARM_JAR" "$OUTPUT_JAR"
+
+    - name: Upload macOS Universal artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-macos-universal
+        path: universal/*.jar
+
+  create-release-bundle:
+    name: Create Release Bundle
+    # Linux is intentionally absent: those jobs are disabled and the Linux JARs
+    # are produced locally by build_linux.sh. A skipped `needs:` entry would
+    # skip this job too.
+    needs: [build-windows-x64, build-windows-arm64, build-macos-x64, build-macos-aarch64, build-macos-universal]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-platforms
+
+    - name: List downloaded artifacts
+      run: |
+        echo "Downloaded artifacts:"
+        find all-platforms -type f
+
+    - name: Create release structure
+      run: |
+        mkdir -p release
+        cp -r all-platforms/* release/
+        cd release
+        zip -r ../swt-all-platforms.zip .
+
+    - name: Upload combined bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: swt-all-platforms-bundle
+        path: swt-all-platforms.zip
+        retention-days: 90
